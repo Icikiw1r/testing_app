@@ -404,3 +404,17 @@ elif menu == "Dashboard":
         with colc2:
             st.subheader("Laporan per Prioritas")
             pr_counts = df["prioritas"].value_counts().reset_index()
+            pr_counts.columns = ["Prioritas", "Jumlah"]
+            st.bar_chart(pr_counts.set_index("Prioritas"))
+
+        st.subheader("Tren Laporan per Tanggal")
+        tmp = df.copy()
+        tmp["Tanggal"] = pd.to_datetime(tmp["created_at"]).dt.date
+        trend = tmp.groupby("Tanggal").size().reset_index(name="Jumlah")
+        st.line_chart(trend.set_index("Tanggal"))
+
+# ---------- Footer ----------
+st.markdown("---")
+st.caption(
+    "Tips: Jalankan dengan `streamlit run app.py`. Folder `uploads/` akan dibuat otomatis. Jika modul PDF belum ada, aplikasi akan mencoba memasang `fpdf2` secara otomatis."
+)
