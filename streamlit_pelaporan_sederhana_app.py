@@ -327,7 +327,7 @@ elif menu == "Daftar Laporan":
                     mime="application/pdf",
                 )
             except Exception as e:
-                st.error(f"Gagal membuat PDF: {e}")",
+                st.error(f"Gagal membuat PDF: {e}")
             csv,
             file_name=f"laporan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
