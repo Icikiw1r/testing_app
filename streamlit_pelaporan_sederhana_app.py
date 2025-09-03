@@ -1,4 +1,4 @@
-import os
+import os, sys, subprocess
 import sqlite3
 from datetime import datetime
 from typing import Optional
@@ -6,11 +6,15 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-# --- Optional PDF dependency ---
+# --- Auto-install fpdf2 jika belum tersedia ---
 try:
-    from fpdf import FPDF  # pip install fpdf2
-except Exception:
-    FPDF = None
+    from fpdf import FPDF
+except ImportError:
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "fpdf2"])
+        from fpdf import FPDF
+    except Exception:
+        FPDF = None
 
 DB_PATH = "reports.db"
 UPLOAD_DIR = "uploads"
@@ -43,7 +47,6 @@ def init_db():
 
 
 def save_upload(upload) -> Optional[str]:
-    """Simpan file ke folder uploads dan kembalikan path relatifnya."""
     if upload is None:
         return None
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -99,7 +102,6 @@ def update_status_bulk(updated_df: pd.DataFrame):
 # ---------- PDF Helpers ----------
 
 class _PDF(FPDF if FPDF else object):
-    # Jika FPDF tidak tersedia, kelas dummy agar import opsional tidak memecah app
     def __init__(self, *args, **kwargs):
         if FPDF:
             super().__init__(*args, **kwargs)
@@ -134,12 +136,10 @@ def _pdf_init():
 
 def pdf_report_detail(row: dict) -> bytes:
     pdf = _pdf_init()
-    # Judul
     pdf.set_font("Times", "B", 16)
     pdf.cell(0, 8, txt=str(row.get("judul", "(Tanpa Judul)")), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
-    # Metadata
     pdf.set_font("Times", size=12)
     fields = [
         ("ID", row.get("id")),
@@ -156,7 +156,6 @@ def pdf_report_detail(row: dict) -> bytes:
         pdf.set_font("Times", size=12)
         pdf.multi_cell(0, 8, str(v))
 
-    # Deskripsi
     desc = row.get("deskripsi")
     if desc:
         pdf.ln(2)
@@ -165,7 +164,6 @@ def pdf_report_detail(row: dict) -> bytes:
         pdf.set_font("Times", size=12)
         pdf.multi_cell(0, 7, str(desc))
 
-    # Lampiran path info (hanya teks)
     att = row.get("lampiran_path")
     if att:
         pdf.ln(2)
@@ -187,7 +185,6 @@ def pdf_report_list(dff: pd.DataFrame) -> bytes:
     pdf.multi_cell(0, 7, f"Dibuat: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     pdf.ln(2)
 
-    # Tabel sederhana
     headers = ["ID", "Tanggal", "Judul", "Kategori", "Prioritas", "Status"]
     col_widths = [15, 36, 70, 28, 25, 22]
     pdf.set_font("Times", "B", 11)
@@ -271,7 +268,6 @@ elif menu == "Daftar Laporan":
 
     df = load_reports()
 
-    # Filter bar
     with st.expander("Filter", expanded=True):
         colf1, colf2, colf3 = st.columns(3)
         with colf1:
@@ -279,7 +275,7 @@ elif menu == "Daftar Laporan":
         with colf2:
             f_prioritas = st.multiselect("Prioritas", sorted(df["prioritas"].dropna().unique().tolist()))
         with colf3:
-            f_status = st.multiselect("Status", ["Baru", "Diproses", "Selesai"])  # allowed values
+            f_status = st.multiselect("Status", ["Baru", "Diproses", "Selesai"])
 
     dff = df.copy()
     if f_kategori:
@@ -289,7 +285,6 @@ elif menu == "Daftar Laporan":
     if f_status:
         dff = dff[dff["status"].isin(f_status)]
 
-    # Tampilkan dan izinkan edit kolom status saja
     editable = dff[["id", "created_at", "judul", "kategori", "prioritas", "status"]].copy()
 
     st.caption("Klik pada kolom 'status' untuk mengubah: Baru / Diproses / Selesai")
@@ -325,9 +320,8 @@ elif menu == "Daftar Laporan":
             mime="text/csv",
         )
 
-    # Tombol ekspor PDF rekap (hasil filter)
     if FPDF is None:
-        st.warning("Modul fpdf2 belum terpasang. Jalankan: pip install fpdf2")
+        st.warning("Modul fpdf2 belum berhasil dipasang.")
     else:
         if st.button("Unduh PDF (rekap hasil filter)"):
             try:
@@ -341,7 +335,6 @@ elif menu == "Daftar Laporan":
             except Exception as e:
                 st.error(f"Gagal membuat PDF: {e}")
 
-    # Detail lampiran
     if not dff.empty:
         st.markdown("### Detail Laporan Terpilih")
         selected_id = st.number_input(
@@ -371,9 +364,8 @@ elif menu == "Daftar Laporan":
             if pd.notna(r["lampiran_path"]) and r["lampiran_path"]:
                 st.markdown(f"**Lampiran:** `{r['lampiran_path']}`")
 
-            # Ekspor PDF detail laporan terpilih
             if FPDF is None:
-                st.info("Untuk ekspor PDF, pasang paket: pip install fpdf2")
+                st.info("Untuk ekspor PDF, modul fpdf2 gagal dipasang.")
             else:
                 if st.button("Unduh PDF (detail laporan ini)", type="primary"):
                     try:
@@ -412,17 +404,3 @@ elif menu == "Dashboard":
         with colc2:
             st.subheader("Laporan per Prioritas")
             pr_counts = df["prioritas"].value_counts().reset_index()
-            pr_counts.columns = ["Prioritas", "Jumlah"]
-            st.bar_chart(pr_counts.set_index("Prioritas"))
-
-        st.subheader("Tren Laporan per Tanggal")
-        tmp = df.copy()
-        tmp["Tanggal"] = pd.to_datetime(tmp["created_at"]).dt.date
-        trend = tmp.groupby("Tanggal").size().reset_index(name="Jumlah")
-        st.line_chart(trend.set_index("Tanggal"))
-
-# ---------- Footer ----------
-st.markdown("---")
-st.caption(
-    "Tips: Jalankan dengan `streamlit run app.py`. Folder `uploads/` akan dibuat otomatis. Untuk ekspor PDF, pasang paket: `pip install fpdf2`."
-)
