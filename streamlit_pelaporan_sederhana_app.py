@@ -5,16 +5,17 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
-import io
+
+# --- Optional PDF dependency ---
 try:
     from fpdf import FPDF  # pip install fpdf2
 except Exception:
-    FPDF = None  # akan dimanfaatkan untuk menampilkan pesan instalasi
+    FPDF = None
 
 DB_PATH = "reports.db"
 UPLOAD_DIR = "uploads"
 
-# ---------- Utilities ----------
+# ---------- Database Utilities ----------
 
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -46,7 +47,6 @@ def save_upload(upload) -> Optional[str]:
     if upload is None:
         return None
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    # Pastikan nama file aman
     filename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{upload.name.replace(' ', '_')}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     with open(filepath, "wb") as f:
@@ -98,8 +98,15 @@ def update_status_bulk(updated_df: pd.DataFrame):
 
 # ---------- PDF Helpers ----------
 
-class _PDF(FPDF):
+class _PDF(FPDF if FPDF else object):
+    # Jika FPDF tidak tersedia, kelas dummy agar import opsional tidak memecah app
+    def __init__(self, *args, **kwargs):
+        if FPDF:
+            super().__init__(*args, **kwargs)
+
     def header(self):
+        if not FPDF:
+            return
         self.set_font("Times", "B", 14)
         self.cell(0, 10, "Laporan Pelaporan", new_x="LMARGIN", new_y="NEXT", align="C")
         self.ln(2)
@@ -108,12 +115,16 @@ class _PDF(FPDF):
         self.ln(4)
 
     def footer(self):
+        if not FPDF:
+            return
         self.set_y(-15)
         self.set_font("Times", "I", 10)
         self.cell(0, 10, f"Halaman {self.page_no()}", align="C")
 
 
 def _pdf_init():
+    if not FPDF:
+        raise RuntimeError("fpdf2 tidak terpasang")
     pdf = _PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -199,6 +210,7 @@ def pdf_report_list(dff: pd.DataFrame) -> bytes:
         pdf.ln()
 
     return pdf.output(dest="S").encode("latin-1")
+
 
 # ---------- UI Components ----------
 
@@ -324,19 +336,20 @@ elif menu == "Daftar Laporan":
                     label="Klik untuk mengunduh PDF",
                     data=pdf_bytes,
                     file_name=f"rekap_laporan_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                    mime="application/pdf",
+                    mime="application/pdf"
                 )
             except Exception as e:
                 st.error(f"Gagal membuat PDF: {e}")
-            csv,
-            file_name=f"laporan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
-        )
 
     # Detail lampiran
     if not dff.empty:
         st.markdown("### Detail Laporan Terpilih")
-        selected_id = st.number_input("Masukkan ID laporan untuk melihat detail", min_value=int(dff["id"].min()), max_value=int(dff["id"].max()), step=1)
+        selected_id = st.number_input(
+            "Masukkan ID laporan untuk melihat detail",
+            min_value=int(dff["id"].min()),
+            max_value=int(dff["id"].max()),
+            step=1
+        )
         detail = df[df["id"] == selected_id]
         if not detail.empty:
             r = detail.iloc[0]
@@ -369,7 +382,7 @@ elif menu == "Daftar Laporan":
                             label="Klik untuk mengunduh PDF",
                             data=pdf_bytes,
                             file_name=f"laporan_{int(r['id'])}.pdf",
-                            mime="application/pdf",
+                            mime="application/pdf"
                         )
                     except Exception as e:
                         st.error(f"Gagal membuat PDF: {e}")
@@ -411,5 +424,5 @@ elif menu == "Dashboard":
 # ---------- Footer ----------
 st.markdown("---")
 st.caption(
-    "Tips: Jalankan dengan `streamlit run app.py`. Folder `uploads/` akan dibuat otomatis untuk menyimpan lampiran."
+    "Tips: Jalankan dengan `streamlit run app.py`. Folder `uploads/` akan dibuat otomatis. Untuk ekspor PDF, pasang paket: `pip install fpdf2`."
 )
