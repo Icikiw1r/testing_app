@@ -5,6 +5,11 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
+import io
+try:
+    from fpdf import FPDF  # pip install fpdf2
+except Exception:
+    FPDF = None  # akan dimanfaatkan untuk menampilkan pesan instalasi
 
 DB_PATH = "reports.db"
 UPLOAD_DIR = "uploads"
@@ -90,6 +95,110 @@ def update_status_bulk(updated_df: pd.DataFrame):
             )
         conn.commit()
 
+
+# ---------- PDF Helpers ----------
+
+class _PDF(FPDF):
+    def header(self):
+        self.set_font("Times", "B", 14)
+        self.cell(0, 10, "Laporan Pelaporan", new_x="LMARGIN", new_y="NEXT", align="C")
+        self.ln(2)
+        self.set_draw_color(200, 200, 200)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+        self.ln(4)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Times", "I", 10)
+        self.cell(0, 10, f"Halaman {self.page_no()}", align="C")
+
+
+def _pdf_init():
+    pdf = _PDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Times", size=12)
+    return pdf
+
+
+def pdf_report_detail(row: dict) -> bytes:
+    pdf = _pdf_init()
+    # Judul
+    pdf.set_font("Times", "B", 16)
+    pdf.cell(0, 8, txt=str(row.get("judul", "(Tanpa Judul)")), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    # Metadata
+    pdf.set_font("Times", size=12)
+    fields = [
+        ("ID", row.get("id")),
+        ("Tanggal", row.get("created_at")),
+        ("Kategori", row.get("kategori")),
+        ("Prioritas", row.get("prioritas")),
+        ("Status", row.get("status")),
+        ("Pelapor", row.get("pelapor_nama") or "-"),
+        ("Email", row.get("pelapor_email") or "-"),
+    ]
+    for k, v in fields:
+        pdf.set_font("Times", "B", 12)
+        pdf.cell(35, 8, f"{k}")
+        pdf.set_font("Times", size=12)
+        pdf.multi_cell(0, 8, str(v))
+
+    # Deskripsi
+    desc = row.get("deskripsi")
+    if desc:
+        pdf.ln(2)
+        pdf.set_font("Times", "B", 12)
+        pdf.cell(0, 8, "Deskripsi", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Times", size=12)
+        pdf.multi_cell(0, 7, str(desc))
+
+    # Lampiran path info (hanya teks)
+    att = row.get("lampiran_path")
+    if att:
+        pdf.ln(2)
+        pdf.set_font("Times", "B", 12)
+        pdf.cell(0, 8, "Lampiran (lokal)", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Times", size=12)
+        pdf.multi_cell(0, 7, str(att))
+
+    out = pdf.output(dest="S").encode("latin-1")
+    return out
+
+
+def pdf_report_list(dff: pd.DataFrame) -> bytes:
+    pdf = _pdf_init()
+    pdf.set_font("Times", "B", 14)
+    pdf.cell(0, 8, "Rekap Laporan (hasil filter)", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+    pdf.set_font("Times", size=12)
+    pdf.multi_cell(0, 7, f"Dibuat: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    pdf.ln(2)
+
+    # Tabel sederhana
+    headers = ["ID", "Tanggal", "Judul", "Kategori", "Prioritas", "Status"]
+    col_widths = [15, 36, 70, 28, 25, 22]
+    pdf.set_font("Times", "B", 11)
+    for h, w in zip(headers, col_widths):
+        pdf.cell(w, 8, h, border=1)
+    pdf.ln()
+
+    pdf.set_font("Times", size=10)
+    for _, r in dff.iterrows():
+        cells = [
+            str(int(r["id"])),
+            str(r["created_at"])[:19],
+            str(r["judul"])[:60],
+            str(r["kategori"])[:18],
+            str(r["prioritas"]),
+            str(r["status"]),
+        ]
+        for c, w in zip(cells, col_widths):
+            pdf.cell(w, 7, c, border=1)
+        pdf.ln()
+
+    return pdf.output(dest="S").encode("latin-1")
 
 # ---------- UI Components ----------
 
@@ -204,6 +313,26 @@ elif menu == "Daftar Laporan":
             mime="text/csv",
         )
 
+    # Tombol ekspor PDF rekap (hasil filter)
+    if FPDF is None:
+        st.warning("Modul fpdf2 belum terpasang. Jalankan: pip install fpdf2")
+    else:
+        if st.button("Unduh PDF (rekap hasil filter)"):
+            try:
+                pdf_bytes = pdf_report_list(dff[["id","created_at","judul","kategori","prioritas","status"]])
+                st.download_button(
+                    label="Klik untuk mengunduh PDF",
+                    data=pdf_bytes,
+                    file_name=f"rekap_laporan_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                )
+            except Exception as e:
+                st.error(f"Gagal membuat PDF: {e}")",
+            csv,
+            file_name=f"laporan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+        )
+
     # Detail lampiran
     if not dff.empty:
         st.markdown("### Detail Laporan Terpilih")
@@ -228,6 +357,22 @@ elif menu == "Daftar Laporan":
                 st.write(r["deskripsi"])
             if pd.notna(r["lampiran_path"]) and r["lampiran_path"]:
                 st.markdown(f"**Lampiran:** `{r['lampiran_path']}`")
+
+            # Ekspor PDF detail laporan terpilih
+            if FPDF is None:
+                st.info("Untuk ekspor PDF, pasang paket: pip install fpdf2")
+            else:
+                if st.button("Unduh PDF (detail laporan ini)", type="primary"):
+                    try:
+                        pdf_bytes = pdf_report_detail(r.to_dict())
+                        st.download_button(
+                            label="Klik untuk mengunduh PDF",
+                            data=pdf_bytes,
+                            file_name=f"laporan_{int(r['id'])}.pdf",
+                            mime="application/pdf",
+                        )
+                    except Exception as e:
+                        st.error(f"Gagal membuat PDF: {e}")
 
 elif menu == "Dashboard":
     st.header("Dashboard Ringkas")
